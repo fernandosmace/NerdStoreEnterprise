@@ -32,7 +32,10 @@ public class Program
         builder.Services.Configure<AppSettings>(appSettingsSection);
 
         var appSettings = appSettingsSection.Get<AppSettings>();
+        builder.Services.AddSingleton<AppSettings>(appSettings);
+
         var key = Encoding.ASCII.GetBytes(appSettings.Secret);
+
 
 
         builder.Services.AddAuthentication(options =>
@@ -49,7 +52,7 @@ public class Program
                 IssuerSigningKey = new SymmetricSecurityKey(key),
                 ValidateIssuer = true,
                 ValidateAudience = true,
-                ValidAudiences = appSettings.ValidIn,
+                ValidAudience = appSettings.ValidIn,
                 ValidIssuer = appSettings.Issuer
             };
         });
