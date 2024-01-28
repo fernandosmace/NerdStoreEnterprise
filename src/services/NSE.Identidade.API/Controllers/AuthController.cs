@@ -10,9 +10,8 @@ using System.Text;
 
 namespace NSE.Identidade.API.Controllers;
 
-[ApiController]
 [Route("account")]
-public class AuthController : Controller
+public class AuthController : MainController
 {
     private readonly SignInManager<IdentityUser> _signInManager;
     private readonly UserManager<IdentityUser> _userManager;
@@ -30,7 +29,7 @@ public class AuthController : Controller
     [HttpPost("register")]
     public async Task<IActionResult> Register(UserRegisterInputModel userRegister)
     {
-        if (!ModelState.IsValid) return BadRequest();
+        if (!ModelState.IsValid) return CustomResponse(ModelState);
 
         var user = new IdentityUser
         {
@@ -43,17 +42,19 @@ public class AuthController : Controller
 
         if (result.Succeeded)
         {
-            await _signInManager.SignInAsync(user, false);
-            return Created();
+            return CustomResponse(await GenerateJwt(userRegister.Email));
         }
 
-        return BadRequest();
+        foreach (var error in result.Errors)
+            AdicionarErrosProcessamento(error.Description);
+
+        return CustomResponse();
     }
 
     [HttpPost("login")]
     public async Task<IActionResult> Login(UserLoginInputModel userLogin)
     {
-        if (!ModelState.IsValid) return BadRequest();
+        if (!ModelState.IsValid) return CustomResponse(ModelState);
 
         var result = await _signInManager.PasswordSignInAsync(userLogin.Email, userLogin.Password, false, true);
 
@@ -61,16 +62,32 @@ public class AuthController : Controller
         {
             var jwtToken = await GenerateJwt(userLogin.Email);
 
-            return Ok(jwtToken);
+            return CustomResponse(jwtToken);
         }
 
-        return BadRequest();
+        if (result.IsLockedOut)
+        {
+            AdicionarErrosProcessamento("Usuário temporariamente bloqueado por tentativas inválidas.");
+            return CustomResponse();
+        }
+
+        AdicionarErrosProcessamento("Usuário ou Senha incorretos.");
+        return CustomResponse();
     }
 
     private async Task<UserViewModelLogin> GenerateJwt(string email)
     {
         var user = await _userManager.FindByEmailAsync(email);
         var claims = await _userManager.GetClaimsAsync(user);
+
+        var identityClaims = await GetUserClaims(claims, user);
+        var encodedToken = EncodeToken(identityClaims);
+
+        return GetTokenResponse(encodedToken, user, claims);
+    }
+
+    private async Task<ClaimsIdentity> GetUserClaims(ICollection<Claim> claims, IdentityUser user)
+    {
         var userRoles = await _userManager.GetRolesAsync(user);
 
         claims.Add(new Claim(JwtRegisteredClaimNames.Sub, user.Id));
@@ -83,8 +100,12 @@ public class AuthController : Controller
             claims.Add(new Claim("role", userRole));
 
         var identityClaims = new ClaimsIdentity(claims);
-        identityClaims.AddClaims(claims);
 
+        return identityClaims;
+    }
+
+    private string EncodeToken(ClaimsIdentity identityClaims)
+    {
         var tokenHandler = new JwtSecurityTokenHandler();
         var key = Encoding.ASCII.GetBytes(_appSettings.Secret);
 
@@ -99,6 +120,11 @@ public class AuthController : Controller
 
         var encodedToken = tokenHandler.WriteToken(token);
 
+        return encodedToken;
+    }
+
+    private UserViewModelLogin GetTokenResponse(string encodedToken, IdentityUser user, IList<Claim> claims)
+    {
         var response = new UserViewModelLogin
         {
             AccessToken = encodedToken,
